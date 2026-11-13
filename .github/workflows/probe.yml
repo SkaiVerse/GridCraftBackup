@@ -20,3 +20,7 @@ jobs:
       - name: UI crate for iPad
         continue-on-error: true
         run: cargo build --release --target aarch64-apple-ios -p gridcraft-ui-egui
+
+      - name: List what the UI crate depends on
+        continue-on-error: true
+        run: cargo tree -p gridcraft-ui-egui --target aarch64-apple-ios --depth 1
