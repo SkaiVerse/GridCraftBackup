@@ -1,0 +1,22 @@
+name: iOS feasibility probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Engine for iPad
+        continue-on-error: true
+        run: cargo build --release --target aarch64-apple-ios -p gridcraft-engine
+
+      - name: UI crate for iPad
+        continue-on-error: true
+        run: cargo build --release --target aarch64-apple-ios -p gridcraft-ui-egui
