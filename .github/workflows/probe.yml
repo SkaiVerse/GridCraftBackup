@@ -13,14 +13,44 @@ jobs:
         with:
           targets: aarch64-apple-ios
 
+      - name: Prepare output folder
+        run: mkdir -p probe-out
+
       - name: Engine for iPad
         continue-on-error: true
-        run: cargo build --release --target aarch64-apple-ios -p gridcraft-engine
+        run: |
+          if cargo build --release --target aarch64-apple-ios -p gridcraft-engine > probe-out/engine.log 2>&1; then
+            echo "engine build: OK" >> probe-out/RESULT.txt
+          else
+            echo "engine build: FAILED" >> probe-out/RESULT.txt
+          fi
 
       - name: UI crate for iPad
         continue-on-error: true
-        run: cargo build --release --target aarch64-apple-ios -p gridcraft-ui-egui
+        run: |
+          if cargo build --release --target aarch64-apple-ios -p gridcraft-ui-egui > probe-out/ui.log 2>&1; then
+            echo "ui build: OK" >> probe-out/RESULT.txt
+          else
+            echo "ui build: FAILED" >> probe-out/RESULT.txt
+          fi
 
-      - name: List what the UI crate depends on
+      - name: Collect information
         continue-on-error: true
-        run: cargo tree -p gridcraft-ui-egui --target aarch64-apple-ios --depth 1
+        run: |
+          cargo tree -p gridcraft-ui-egui --target aarch64-apple-ios --depth 1 > probe-out/ui-tree-depth1.txt 2>&1 || true
+          cargo tree -p gridcraft-ui-egui --target aarch64-apple-ios > probe-out/ui-tree-full.txt 2>&1 || true
+          cp Cargo.toml probe-out/root-Cargo.toml || true
+          cp crates/ui-egui/Cargo.toml probe-out/ui-egui-Cargo.toml || true
+          cp crates/ui-egui/src/services.rs probe-out/ui-egui-services.rs || true
+          grep -n "pub fn\|pub(crate) fn\|^impl\|fn update\|fn logic\|fn show" crates/ui-egui/src/app.rs > probe-out/ui-egui-app-functions.txt || true
+          grep -A1 -E '^name = "(egui|egui-wgpu|eframe|wgpu|winit|arboard|rfd|accesskit|craft-update|craft-window|craft-ui)"$' Cargo.lock > probe-out/versions.txt || true
+          for f in apps/gridcraft-web/Cargo.toml apps/gridcraft-web/src/*.rs; do
+            echo "=== $f ===" >> probe-out/web-source.txt
+            cat "$f" >> probe-out/web-source.txt || true
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-info
+          path: probe-out
