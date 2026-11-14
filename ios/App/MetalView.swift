@@ -226,6 +226,15 @@ final class MetalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         return m
     }
 
+    /// Only real typing keys type text: letters, digits, punctuation, space and the keypad.
+    /// Arrows, Return, Tab, Escape, F-keys and the like are key presses, never text.
+    private func typesText(_ hid: UInt32) -> Bool {
+        if hid >= 0x04 && hid <= 0x27 { return true }                 // letters and digits
+        if hid >= 0x2C && hid <= 0x38 { return true }                 // space and punctuation
+        if hid >= 0x54 && hid <= 0x63 && hid != 0x58 { return true }  // keypad (not its Enter)
+        return false
+    }
+
     private func printable(_ s: String) -> String? {
         guard !s.isEmpty else { return nil }
         let ok = s.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F && !(0xF700...0xF8FF).contains($0.value) }
@@ -254,7 +263,7 @@ final class MetalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             if clipboardShortcut(hid: hid, mods: mods) { return true }
             gc_key(h, hid, 1, 0, mods)
             var text: String? = nil
-            if mods & (8 | 2) == 0 { text = printable(key.characters) }
+            if typesText(hid) && mods & (8 | 2) == 0 { text = printable(key.characters) }
             if let t = text { t.withCString { gc_text(h, $0) } }
             let now = CACurrentMediaTime()
             held = (hid, mods, text, now, now)
