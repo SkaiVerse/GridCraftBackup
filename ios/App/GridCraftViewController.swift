@@ -21,8 +21,6 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
     private let metal = MetalView()
     private enum Mode { case open, save, picture }
     private var mode: Mode = .open
-    /// Files opened from Files, kept so Save can offer to replace the original.
-    private var opened: [String: URL] = [:]
 
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
@@ -71,15 +69,16 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
         }
     }
 
-    // MARK: Files
+    // MARK: Opening files
 
     private func pick(_ m: Mode) {
         gcLog("pick requested: \(m); already presenting: \(presentedViewController != nil)")
         guard presentedViewController == nil else { return }
         mode = m
         let types: [UTType] = (m == .picture) ? [.image] : [.item]
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: false)
-        picker.allowsMultipleSelection = (m == .open)
+        // A copy of the one chosen file: tapping the file returns it straight away.
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+        picker.allowsMultipleSelection = false
         picker.delegate = self
         metal.suspendFocus = true
         present(picker, animated: true) { gcLog("picker is on screen") }
@@ -90,11 +89,10 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
         metal.suspendFocus = false
         switch mode {
         case .open:
-            for url in urls { read(url, keepAccess: true) { name, data in self.metal.deliverOpened(name: name, data: data) } }
+            for url in urls { read(url) { name, data in self.metal.deliverOpened(name: name, data: data) } }
         case .picture:
-            for url in urls { read(url, keepAccess: false) { name, data in self.metal.deliverPicture(name: name, data: data) } }
+            for url in urls { read(url) { name, data in self.metal.deliverPicture(name: name, data: data) } }
         case .save:
-            if let u = urls.first { opened[u.lastPathComponent] = u }
             metal.saveResult(ok: true)
         }
     }
@@ -105,60 +103,31 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
         if mode == .save { metal.saveResult(ok: false) }
     }
 
-    private func read(_ url: URL, keepAccess: Bool, deliver: (String, Data) -> Void) {
+    private func read(_ url: URL, deliver: (String, Data) -> Void) {
         let scoped = url.startAccessingSecurityScopedResource()
-        gcLog("reading \(url.lastPathComponent), security scope granted: \(scoped)")
-        var data: Data?
-        var readError: Error?
-        var coordError: NSError?
-        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { readURL in
-            do { data = try Data(contentsOf: readURL) } catch { readError = error }
-        }
-        if scoped && !keepAccess { url.stopAccessingSecurityScopedResource() }
-        if let data = data {
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url)
             gcLog("read \(data.count) bytes from \(url.lastPathComponent)")
-            if keepAccess { opened[url.lastPathComponent] = url }
             deliver(url.lastPathComponent, data)
-        } else {
-            let why = (readError ?? coordError)?.localizedDescription ?? "It could not be read."
-            gcLog("read failed: \(why)")
-            message("Couldn’t open the file", why)
+        } catch {
+            gcLog("read failed: \(error.localizedDescription)")
+            message("Couldn’t open the file", error.localizedDescription)
         }
     }
 
     // MARK: Saving
 
+    /// Always Apple's own Save to Files sheet. If the same name is chosen in the same folder,
+    /// Files itself asks Replace / Keep Both / Cancel.
     private func handleSave(name: String, data: Data) {
         gcLog("save requested: \(name), \(data.count) bytes")
         guard presentedViewController == nil else { metal.saveResult(ok: false); return }
         let safe = name.replacingOccurrences(of: "/", with: "_")
-        if let original = opened[safe] {
-            let alert = UIAlertController(title: "Save “\(safe)”",
-                                          message: "You opened this file from Files. What would you like to do?",
-                                          preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "Replace Original", style: .default) { _ in
-                self.metal.suspendFocus = false
-                self.overwrite(original, with: data)
-            })
-            alert.addAction(UIAlertAction(title: "Save as New Copy…", style: .default) { _ in
-                self.export(name: safe, data: data)
-            })
-            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
-                self.metal.suspendFocus = false
-                self.metal.saveResult(ok: false)
-            })
-            metal.suspendFocus = true
-            present(alert, animated: true)
-        } else {
-            export(name: safe, data: data)
-        }
-    }
-
-    private func export(name: String, data: Data) {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let file = folder.appendingPathComponent(name)
+            let file = folder.appendingPathComponent(safe)
             try data.write(to: file)
             mode = .save
             let picker = UIDocumentPickerViewController(forExporting: [file], asCopy: true)
@@ -169,22 +138,6 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
             metal.suspendFocus = false
             metal.saveResult(ok: false)
             message("Couldn’t prepare the file", error.localizedDescription)
-        }
-    }
-
-    private func overwrite(_ url: URL, with data: Data) {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        var coordError: NSError?
-        var writeError: Error?
-        NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordError) { writeURL in
-            do { try data.write(to: writeURL) } catch { writeError = error }
-        }
-        if let e = (coordError as Error?) ?? writeError {
-            metal.saveResult(ok: false)
-            message("Couldn’t save", e.localizedDescription)
-        } else {
-            metal.saveResult(ok: true)
         }
     }
 
@@ -200,10 +153,13 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
         controller.present(from: metal.bounds, in: metal, animated: true, completionHandler: nil)
     }
 
+    /// Shown a moment later, so it still appears while a picker is closing.
     private func message(_ title: String, _ text: String) {
-        guard presentedViewController == nil else { return }
-        let a = UIAlertController(title: title, message: text, preferredStyle: .alert)
-        a.addAction(UIAlertAction(title: "OK", style: .default))
-        present(a, animated: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self = self, self.presentedViewController == nil else { return }
+            let a = UIAlertController(title: title, message: text, preferredStyle: .alert)
+            a.addAction(UIAlertAction(title: "OK", style: .default))
+            self.present(a, animated: true)
+        }
     }
 }
