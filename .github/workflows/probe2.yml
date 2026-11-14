@@ -1,0 +1,52 @@
+name: Probe 2 - read the graphics and input APIs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe2:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Download all dependencies
+        run: cargo fetch --target aarch64-apple-ios
+
+      - name: Collect sources
+        continue-on-error: true
+        run: |
+          mkdir -p out/egui-wgpu out/egui out/wgpu out/ui-egui
+
+          EGUI_WGPU=$(find ~/.cargo/git/checkouts -type d -path "*/crates/egui-wgpu" | grep 6d518fc | head -1 || true)
+          EGUI=$(find ~/.cargo/git/checkouts -type d -path "*/crates/egui" | grep 6d518fc | head -1 || true)
+          WGPU=$(ls -d ~/.cargo/registry/src/*/wgpu-30.0.1 | head -1 || true)
+          echo "egui-wgpu: $EGUI_WGPU" >> out/paths.txt
+          echo "egui: $EGUI" >> out/paths.txt
+          echo "wgpu: $WGPU" >> out/paths.txt
+
+          cp -R "$EGUI_WGPU/src" out/egui-wgpu/ || true
+          cp "$EGUI_WGPU/Cargo.toml" out/egui-wgpu/ || true
+          cp "$EGUI/Cargo.toml" out/egui/ || true
+          cp "$EGUI/src/data/input.rs" out/egui/input.rs || true
+          cp "$EGUI/src/context.rs" out/egui/context.rs || true
+          cp -R "$WGPU/src/api" out/wgpu/ || true
+          grep -rn "CoreAnimationLayer" "$WGPU/src" > out/wgpu-coreanimation.txt || true
+
+          cp crates/ui-egui/src/app.rs out/ui-egui/ || true
+          cp crates/ui-egui/src/keymap.rs out/ui-egui/ || true
+          cp crates/ui-egui/src/state.rs out/ui-egui/ || true
+          grep -rn "raw_input_hook" crates/ui-egui/src > out/grep-raw-input-hook.txt || true
+          grep -rn "target_os\|cfg!(target\|is_mac\|MAC" crates/ui-egui/src > out/grep-platform.txt || true
+          grep -rn "services.download\|services.inbox\|open_async\|pick_open\|pick_save\|pick_picture\|open_url" crates/ui-egui/src > out/grep-services-use.txt || true
+          grep -rn "pub fn open_path\|pub fn after_engine\|fn is_dirty\|pub allow_close\|fn open_bytes\|fn save_as\|fn save(" crates > out/grep-open-save.txt || true
+          cp Cargo.lock out/Cargo.lock || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe2-info
+          path: out
