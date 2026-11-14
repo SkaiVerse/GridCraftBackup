@@ -110,6 +110,28 @@ fn hid_to_key(hid: u32) -> Option<egui::Key> {
     })
 }
 
+/// Writes down which system font folders this iPad lets the app read, so the font lookup can be
+/// checked against the real layout.
+fn log_font_dirs() {
+    for d in [
+        "/System/Library/Fonts",
+        "/System/Library/Fonts/Core",
+        "/System/Library/Fonts/CoreAddition",
+        "/System/Library/Fonts/Supplemental",
+        "/System/Library/Fonts/AppFonts",
+        "/System/Library/Fonts/LanguageSupport",
+        "/Library/Fonts",
+    ] {
+        match std::fs::read_dir(d) {
+            Ok(rd) => {
+                let names: Vec<String> = rd.flatten().take(14).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+                note(&format!("font folder {d}: readable, first entries {names:?}"));
+            }
+            Err(e) => note(&format!("font folder {d}: {e}")),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Preferences (same files as the desktop app, in the app's own folder)
 // ---------------------------------------------------------------------------------------------
@@ -280,6 +302,7 @@ struct Host {
     pending_save: Rc<RefCell<Option<String>>>,
     wants_keyboard: bool,
     zoom_pct: f32,
+    fonts_logged: bool,
 }
 
 fn wake_at(deadline: &Arc<Mutex<Option<Instant>>>, at: Instant) {
@@ -291,6 +314,7 @@ fn wake_at(deadline: &Arc<Mutex<Option<Instant>>>, at: Instant) {
 
 impl Host {
     fn new(layer: *mut c_void, width: u32, height: u32, scale: f32, cb: GCCallbacks) -> Result<Host, String> {
+        log_font_dirs();
         let gpu = Gpu::new(layer, width, height)?;
         let ctx = egui::Context::default();
         // Apple's shortcut set only: the app asks the context which system it runs on.
@@ -334,6 +358,7 @@ impl Host {
             pending_save,
             wants_keyboard: false,
             zoom_pct: 100.0,
+            fonts_logged: false,
         })
     }
 
@@ -370,6 +395,24 @@ impl Host {
         self.wake();
     }
 
+    /// AutoSave saves a workbook to its file. A workbook opened from Files has no file of its own,
+    /// so while AutoSave is on it gets one in the app's AutoSave folder (Files > On My iPad >
+    /// GridCraft > AutoSave). The app's own AutoSave then keeps it up to date, silently.
+    fn ensure_autosave_path(&mut self) {
+        let Some(home) = std::env::var_os("HOME") else { return };
+        let dir = PathBuf::from(home).join("Documents").join("AutoSave");
+        if let Some(doc) = self.app.session.active_mut()
+            && doc.path.is_none()
+        {
+            let _ = std::fs::create_dir_all(&dir);
+            let cleaned: String = doc.title.chars().filter(|c| !matches!(c, '/' | '\\' | ':' | '\0')).collect();
+            let stem = cleaned.trim().trim_end_matches(".xlsx").trim_end_matches(".XLSX").trim().to_string();
+            let stem = if stem.is_empty() { "Book1".to_string() } else { stem };
+            doc.path = Some(dir.join(format!("{stem}.xlsx")).to_string_lossy().into_owned());
+            note(&format!("AutoSave file for this workbook: {stem}.xlsx"));
+        }
+    }
+
     fn handle_output(&self, out: &egui::PlatformOutput) {
         for cmd in &out.commands {
             match cmd {
@@ -401,6 +444,16 @@ impl Host {
             return self.flags(false);
         }
         *self.deadline.lock().unwrap_or_else(|e| e.into_inner()) = None;
+
+        if self.app.ui.autosave {
+            self.ensure_autosave_path();
+        }
+        if !self.fonts_logged && gridcraft_ui_egui::fonts::scan_done() {
+            self.fonts_logged = true;
+            let n = gridcraft_ui_egui::fonts::catalog().len();
+            let fam = gridcraft_ui_egui::fonts::families().len();
+            note(&format!("fonts: {n} faces cataloged, {fam} families in the font list"));
+        }
 
         let ppp = self.scale * self.ctx.zoom_factor().max(0.1);
         let rect = egui::Rect::from_min_size(
