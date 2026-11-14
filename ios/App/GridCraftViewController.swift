@@ -1,6 +1,20 @@
 import UIKit
 import UniformTypeIdentifiers
 
+/// Writes a line to GridCraft-log.txt (visible in Files: On My iPad > GridCraft).
+func gcLog(_ message: String) {
+    guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+    let url = docs.appendingPathComponent("GridCraft-log.txt")
+    let line = "[swift] \(message)\n"
+    if let handle = try? FileHandle(forWritingTo: url) {
+        handle.seekToEndOfFile()
+        handle.write(Data(line.utf8))
+        try? handle.close()
+    } else {
+        try? line.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
 /// Owns the drawing view and everything that needs Apple's own screens: Files, alerts, printing.
 final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate {
 
@@ -60,6 +74,7 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
     // MARK: Files
 
     private func pick(_ m: Mode) {
+        gcLog("pick requested: \(m); already presenting: \(presentedViewController != nil)")
         guard presentedViewController == nil else { return }
         mode = m
         let types: [UTType] = (m == .picture) ? [.image] : [.item]
@@ -67,10 +82,11 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
         picker.allowsMultipleSelection = (m == .open)
         picker.delegate = self
         metal.suspendFocus = true
-        present(picker, animated: true)
+        present(picker, animated: true) { gcLog("picker is on screen") }
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        gcLog("picker returned \(urls.count) item(s) in mode \(mode)")
         metal.suspendFocus = false
         switch mode {
         case .open:
@@ -84,29 +100,36 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        gcLog("picker cancelled in mode \(mode)")
         metal.suspendFocus = false
         if mode == .save { metal.saveResult(ok: false) }
     }
 
     private func read(_ url: URL, keepAccess: Bool, deliver: (String, Data) -> Void) {
         let scoped = url.startAccessingSecurityScopedResource()
+        gcLog("reading \(url.lastPathComponent), security scope granted: \(scoped)")
         var data: Data?
+        var readError: Error?
         var coordError: NSError?
         NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { readURL in
-            data = try? Data(contentsOf: readURL)
+            do { data = try Data(contentsOf: readURL) } catch { readError = error }
         }
         if scoped && !keepAccess { url.stopAccessingSecurityScopedResource() }
         if let data = data {
+            gcLog("read \(data.count) bytes from \(url.lastPathComponent)")
             if keepAccess { opened[url.lastPathComponent] = url }
             deliver(url.lastPathComponent, data)
         } else {
-            message("Couldn’t open the file", coordError?.localizedDescription ?? "It could not be read.")
+            let why = (readError ?? coordError)?.localizedDescription ?? "It could not be read."
+            gcLog("read failed: \(why)")
+            message("Couldn’t open the file", why)
         }
     }
 
     // MARK: Saving
 
     private func handleSave(name: String, data: Data) {
+        gcLog("save requested: \(name), \(data.count) bytes")
         guard presentedViewController == nil else { metal.saveResult(ok: false); return }
         let safe = name.replacingOccurrences(of: "/", with: "_")
         if let original = opened[safe] {
