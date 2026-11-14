@@ -346,6 +346,15 @@ impl Host {
         self.wake();
     }
 
+    /// Tells egui which modifier keys (Shift, Command, ...) are down, whenever that changes.
+    /// This egui version learns modifier state only from this event.
+    fn set_modifiers(&mut self, m: egui::Modifiers) {
+        if m != self.modifiers {
+            self.modifiers = m;
+            self.push(egui::Event::ModifiersChanged(m));
+        }
+    }
+
     /// Points in the UIKit sense, converted to egui points (the interface size preference zooms).
     fn pt(&self, x: f32, y: f32) -> egui::Pos2 {
         let z = self.ctx.zoom_factor().max(0.1);
@@ -573,7 +582,7 @@ pub unsafe extern "C" fn gc_pointer_gone(h: *mut c_void) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gc_pointer_button(h: *mut c_void, x: f32, y: f32, button: c_int, pressed: c_int, mods: u32) {
     if let Some(h) = unsafe { host(h) } {
-        h.modifiers = to_mods(mods);
+        h.set_modifiers(to_mods(mods));
         let pos = h.pt(x, y);
         let button = match button {
             1 => egui::PointerButton::Secondary,
@@ -588,7 +597,7 @@ pub unsafe extern "C" fn gc_pointer_button(h: *mut c_void, x: f32, y: f32, butto
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gc_scroll(h: *mut c_void, dx: f32, dy: f32, mods: u32) {
     if let Some(h) = unsafe { host(h) } {
-        h.modifiers = to_mods(mods);
+        h.set_modifiers(to_mods(mods));
         let z = h.ctx.zoom_factor().max(0.1);
         let m = h.modifiers;
         h.push(egui::Event::MouseWheel {
@@ -627,7 +636,7 @@ pub unsafe extern "C" fn gc_key(h: *mut c_void, hid: u32, pressed: c_int, repeat
             h.apply_zoom(base + step);
             return;
         }
-        h.modifiers = to_mods(mods);
+        h.set_modifiers(to_mods(mods));
         let Some(key) = hid_to_key(hid) else { return };
         let m = h.modifiers;
         h.push(egui::Event::Key { key, physical_key: Some(key), pressed: pressed != 0, repeat: repeat != 0, modifiers: m });
