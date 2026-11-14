@@ -23,10 +23,9 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p logs
-          grep -rn "zoom_delta\|multi_touch\|view.zoom\|smooth_scroll" crates/ui-egui/src > logs/grep-zoom.txt || true
-          grep -rn "keymap::" crates/ui-egui/src > logs/grep-keymap-callers.txt || true
-          grep -n "open_async\|pick_open" -B8 -A8 crates/ui-egui/src/backstage.rs > logs/backstage-open.txt || true
-          sed -n 380,415p crates/ui-egui/src/app/commands.rs > logs/commands-open.txt || true
+          sed -n 70,150p crates/ui-egui/src/grid/show.rs > logs/grid-show-zoom-and-touch.txt || true
+          grep -rn "touch_pan" crates/ui-egui/src > logs/grep-touch-pan.txt || true
+          grep -rn "Event::Touch\|multi_touch" crates/ui-egui/src > logs/grep-touch-events.txt || true
 
       - name: Build the Rust core
         run: |
