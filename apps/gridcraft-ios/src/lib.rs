@@ -40,7 +40,7 @@ fn note(msg: &str) {
     let Some(home) = std::env::var_os("HOME") else { return };
     let path = PathBuf::from(home).join("Documents").join("GridCraft-log.txt");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{msg}");
+        let _ = writeln!(f, "[rust] {msg}");
     }
 }
 
@@ -163,6 +163,7 @@ fn build_services(
     Services {
         inbox: Some(inbox.clone()),
         open_async: Some(Box::new(move || {
+            note("the app asked to open a file");
             if let Some(f) = cb.open_files {
                 unsafe { f(cb.user) }
             }
@@ -278,6 +279,7 @@ struct Host {
     pictures: Rc<RefCell<Option<Inbox>>>,
     pending_save: Rc<RefCell<Option<String>>>,
     wants_keyboard: bool,
+    zoom_pct: f32,
 }
 
 fn wake_at(deadline: &Arc<Mutex<Option<Instant>>>, at: Instant) {
@@ -291,6 +293,8 @@ impl Host {
     fn new(layer: *mut c_void, width: u32, height: u32, scale: f32, cb: GCCallbacks) -> Result<Host, String> {
         let gpu = Gpu::new(layer, width, height)?;
         let ctx = egui::Context::default();
+        // Apple's shortcut set only: the app asks the context which system it runs on.
+        ctx.set_os(egui::os::OperatingSystem::Mac);
         let deadline: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(Some(Instant::now())));
         {
             let dl = deadline.clone();
@@ -329,6 +333,7 @@ impl Host {
             pictures,
             pending_save,
             wants_keyboard: false,
+            zoom_pct: 100.0,
         })
     }
 
@@ -345,6 +350,15 @@ impl Host {
     fn pt(&self, x: f32, y: f32) -> egui::Pos2 {
         let z = self.ctx.zoom_factor().max(0.1);
         egui::pos2(x / z, y / z)
+    }
+
+    /// The sheet's zoom percentage (View > Zoom), 10 to 400.
+    fn apply_zoom(&mut self, percent: f32) {
+        let p = percent.clamp(10.0, 400.0);
+        self.zoom_pct = p;
+        let _ = self.app.run("view.zoom", serde_json::json!({ "percent": p.round() as i64 }));
+        self.app.after_engine();
+        self.wake();
     }
 
     fn handle_output(&self, out: &egui::PlatformOutput) {
@@ -571,23 +585,48 @@ pub unsafe extern "C" fn gc_pointer_button(h: *mut c_void, x: f32, y: f32, butto
     }
 }
 
-/// TEMPORARILY OFF: this egui version's scroll event has two extra fields (`phase`, `source`)
-/// whose types are read from the build-logs dump; it is switched back on in the next round.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gc_scroll(h: *mut c_void, dx: f32, dy: f32, mods: u32) {
-    let _ = (h, dx, dy, mods);
+    if let Some(h) = unsafe { host(h) } {
+        h.modifiers = to_mods(mods);
+        let z = h.ctx.zoom_factor().max(0.1);
+        let m = h.modifiers;
+        h.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(dx / z, dy / z),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: m,
+        });
+    }
 }
 
+/// Pinch: scales the sheet's zoom percentage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gc_zoom(h: *mut c_void, factor: f32) {
     if let Some(h) = unsafe { host(h) } {
-        h.push(egui::Event::Zoom(factor));
+        if !factor.is_finite() || factor <= 0.0 {
+            return;
+        }
+        let target = (h.zoom_pct * factor).clamp(10.0, 400.0);
+        if (target.round() - h.zoom_pct.round()).abs() >= 1.0 {
+            h.apply_zoom(target);
+        } else {
+            h.zoom_pct = target;
+        }
     }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gc_key(h: *mut c_void, hid: u32, pressed: c_int, repeat: c_int, mods: u32) {
     if let Some(h) = unsafe { host(h) } {
+        // Zoom, as in Excel for Mac: Command+Option+= and Command+Option+-.
+        if pressed != 0 && (mods & !1) == 12 && (hid == 0x2E || hid == 0x2D) {
+            let step = if hid == 0x2E { 10.0 } else { -10.0 };
+            let base = (h.zoom_pct / 10.0).round() * 10.0;
+            h.apply_zoom(base + step);
+            return;
+        }
         h.modifiers = to_mods(mods);
         let Some(key) = hid_to_key(hid) else { return };
         let m = h.modifiers;
@@ -634,6 +673,7 @@ pub unsafe extern "C" fn gc_open_file(h: *mut c_void, name: *const c_char, data:
     if let Some(h) = unsafe { host(h) }
         && let Some(name) = unsafe { from_c(name) }
     {
+        note(&format!("a file arrived: {name}, {len} bytes"));
         let bytes = if data.is_null() || len == 0 { Vec::new() } else { unsafe { std::slice::from_raw_parts(data, len) }.to_vec() };
         h.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
         h.wake();
