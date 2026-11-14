@@ -19,13 +19,21 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Collect information for debugging
+      - name: Collect font code for debugging
         continue-on-error: true
         run: |
           mkdir -p logs
-          sed -n 70,150p crates/ui-egui/src/grid/show.rs > logs/grid-show-zoom-and-touch.txt || true
-          grep -rn "touch_pan" crates/ui-egui/src > logs/grep-touch-pan.txt || true
-          grep -rn "Event::Touch\|multi_touch" crates/ui-egui/src > logs/grep-touch-events.txt || true
+          cp crates/ui-egui/src/fonts.rs logs/ || true
+          cp crates/ui-egui/src/theme/font_setup.rs logs/ || true
+          cp crates/ui-egui/src/theme/font_fallback.rs logs/ || true
+          cp crates/ui-egui/src/craft_fonts_policy.rs logs/ || true
+          grep -rn "UI_BOLD\|fn bold\|\"bold\"\|italic" crates/ui-egui/src/theme/font_setup.rs > logs/grep-bold.txt || true
+
+      - name: Patch fonts to find the iPad's system fonts (experiment)
+        continue-on-error: true
+        run: |
+          sed -i 's/cfg!(target_os = "macos")/cfg!(any(target_os = "macos", target_os = "ios"))/g' crates/ui-egui/src/fonts.rs crates/ui-egui/src/theme/font_setup.rs
+          grep -n 'target_os' crates/ui-egui/src/fonts.rs crates/ui-egui/src/theme/font_setup.rs > logs/font-patch-result.txt || true
 
       - name: Build the Rust core
         run: |
