@@ -23,17 +23,10 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p logs
-          cp crates/ui-egui/src/app/keys.rs logs/ || true
-          cp crates/ui-egui/src/app/input.rs logs/ || true
-          cargo fetch --target aarch64-apple-ios || true
-          EGUI=$(find ~/.cargo/git/checkouts -type d -path "*/crates/egui" | grep 6d518fc | head -1)
-          echo "$EGUI" > logs/egui-path.txt
-          grep -rn "MouseWheel" "$EGUI/src" > logs/grep-mousewheel.txt || true
-          F=$(grep -rl "pub enum Event" "$EGUI/src" | head -1)
-          echo "$F" >> logs/egui-path.txt
-          cp "$F" logs/egui-event-definition.rs || true
-          G=$(grep -rl "pub struct RawInput" "$EGUI/src" | head -1)
-          cp "$G" logs/egui-rawinput-definition.rs || true
+          grep -rn "zoom_delta\|multi_touch\|view.zoom\|smooth_scroll" crates/ui-egui/src > logs/grep-zoom.txt || true
+          grep -rn "keymap::" crates/ui-egui/src > logs/grep-keymap-callers.txt || true
+          grep -n "open_async\|pick_open" -B8 -A8 crates/ui-egui/src/backstage.rs > logs/backstage-open.txt || true
+          sed -n 380,415p crates/ui-egui/src/app/commands.rs > logs/commands-open.txt || true
 
       - name: Build the Rust core
         run: |
