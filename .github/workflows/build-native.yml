@@ -1,0 +1,77 @@
+name: Build native iPad IPA
+
+on:
+  workflow_dispatch:
+
+env:
+  IPHONEOS_DEPLOYMENT_TARGET: "18.4"
+  CARGO_TERM_COLOR: never
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Collect information for debugging
+        continue-on-error: true
+        run: |
+          mkdir -p logs
+          cp crates/ui-egui/src/app/keys.rs logs/ || true
+          cp crates/ui-egui/src/app/input.rs logs/ || true
+          cp crates/ui-egui/src/app/clipboard.rs logs/ || true
+          cp crates/ui-egui/src/app/files.rs logs/ || true
+          cp crates/ui-egui/src/app/quit.rs logs/ || true
+          grep -rn -B6 -A3 "keymap::lookup" crates/ui-egui/src > logs/keymap-callers.txt || true
+
+      - name: Build the Rust core
+        run: |
+          set -o pipefail
+          mkdir -p logs ios/rust-lib
+          cargo rustc --release --target aarch64-apple-ios -p gridcraft-ios -- --print native-static-libs 2>&1 | tee logs/rust-build.log
+          cp target/aarch64-apple-ios/release/libgridcraft_ios.a ios/rust-lib/
+          NATIVE=$(grep -o 'native-static-libs:.*' logs/rust-build.log | head -1 | sed 's/native-static-libs: //')
+          echo "System libraries: $NATIVE"
+          echo "NATIVE_LIBS=$NATIVE" >> "$GITHUB_ENV"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: cd ios && xcodegen generate
+
+      - name: Build the app (unsigned)
+        run: |
+          set -o pipefail
+          cd ios
+          xcodebuild -project GridCraft.xcodeproj -scheme GridCraft \
+            -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            NATIVE_LIBS="$NATIVE_LIBS" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee ../logs/xcodebuild.log
+
+      - name: Package IPA
+        run: |
+          cd ios
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/GridCraft.app Payload/
+          zip -qr ../GridCraft.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GridCraft-ipa
+          path: GridCraft.ipa
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-logs
+          path: logs
