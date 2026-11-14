@@ -25,10 +25,15 @@ jobs:
           mkdir -p logs
           cp crates/ui-egui/src/app/keys.rs logs/ || true
           cp crates/ui-egui/src/app/input.rs logs/ || true
-          cp crates/ui-egui/src/app/clipboard.rs logs/ || true
-          cp crates/ui-egui/src/app/files.rs logs/ || true
-          cp crates/ui-egui/src/app/quit.rs logs/ || true
-          grep -rn -B6 -A3 "keymap::lookup" crates/ui-egui/src > logs/keymap-callers.txt || true
+          cargo fetch --target aarch64-apple-ios || true
+          EGUI=$(find ~/.cargo/git/checkouts -type d -path "*/crates/egui" | grep 6d518fc | head -1)
+          echo "$EGUI" > logs/egui-path.txt
+          grep -rn "MouseWheel" "$EGUI/src" > logs/grep-mousewheel.txt || true
+          F=$(grep -rl "pub enum Event" "$EGUI/src" | head -1)
+          echo "$F" >> logs/egui-path.txt
+          cp "$F" logs/egui-event-definition.rs || true
+          G=$(grep -rl "pub struct RawInput" "$EGUI/src" | head -1)
+          cp "$G" logs/egui-rawinput-definition.rs || true
 
       - name: Build the Rust core
         run: |
