@@ -19,21 +19,38 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Collect font code for debugging
+      - name: Teach the app where the iPad keeps its fonts
+        run: |
+          mkdir -p logs
+          python3 - <<'PYEOF'
+          import pathlib
+          report = []
+          def patch(path, pairs):
+              p = pathlib.Path(path)
+              s = p.read_text()
+              for old, new in pairs:
+                  report.append(f"{path}: {s.count(old)} match(es) of {old[:70]!r}")
+                  s = s.replace(old, new)
+              p.write_text(s)
+          MAC = 'cfg!(target_os = "macos")'
+          IOS = 'cfg!(any(target_os = "macos", target_os = "ios"))'
+          patch("crates/ui-egui/src/fonts.rs", [(MAC, IOS)])
+          patch("crates/ui-egui/src/theme/font_setup.rs", [
+              (MAC, IOS),
+              ('let mac_sys = "/System/Library/Fonts";',
+               'let mac_sys = if cfg!(target_os = "ios") { "/System/Library/Fonts/Core" } else { "/System/Library/Fonts" };'),
+              ('let mac_sup = "/System/Library/Fonts/Supplemental";',
+               'let mac_sup = if cfg!(target_os = "ios") { "/System/Library/Fonts/CoreAddition" } else { "/System/Library/Fonts/Supplemental" };'),
+          ])
+          pathlib.Path("logs/font-patch-result.txt").write_text("\n".join(report) + "\n")
+          PYEOF
+          cat logs/font-patch-result.txt
+
+      - name: Collect autosave code for debugging
         continue-on-error: true
         run: |
           mkdir -p logs
-          cp crates/ui-egui/src/fonts.rs logs/ || true
-          cp crates/ui-egui/src/theme/font_setup.rs logs/ || true
-          cp crates/ui-egui/src/theme/font_fallback.rs logs/ || true
-          cp crates/ui-egui/src/craft_fonts_policy.rs logs/ || true
-          grep -rn "UI_BOLD\|fn bold\|\"bold\"\|italic" crates/ui-egui/src/theme/font_setup.rs > logs/grep-bold.txt || true
-
-      - name: Patch fonts to find the iPad's system fonts (experiment)
-        continue-on-error: true
-        run: |
-          sed -i 's/cfg!(target_os = "macos")/cfg!(any(target_os = "macos", target_os = "ios"))/g' crates/ui-egui/src/fonts.rs crates/ui-egui/src/theme/font_setup.rs
-          grep -n 'target_os' crates/ui-egui/src/fonts.rs crates/ui-egui/src/theme/font_setup.rs > logs/font-patch-result.txt || true
+          grep -rn "fn autosave" -A40 crates/ui-egui/src > logs/autosave-code.txt || true
 
       - name: Build the Rust core
         run: |
