@@ -388,7 +388,6 @@ impl Host {
         raw.time = Some(self.start.elapsed().as_secs_f64());
         raw.screen_rect = Some(rect);
         raw.focused = self.focused;
-        raw.modifiers = self.modifiers;
         raw.system_theme = Some(if self.dark { egui::Theme::Dark } else { egui::Theme::Light });
         raw.max_texture_side = Some(self.gpu.device.limits().max_texture_dimension_2d as usize);
         raw.events = std::mem::take(&mut self.events);
@@ -403,7 +402,7 @@ impl Host {
         let mut full = ctx.run_ui(raw, |ui| self.app.ui(ui));
         self.handle_output(&logic.platform_output);
         self.handle_output(&full.platform_output);
-        self.wants_keyboard = ctx.wants_keyboard_input();
+        self.wants_keyboard = ctx.egui_wants_keyboard_input();
 
         if let Some(vo) = full.viewport_output.get(&egui::ViewportId::ROOT)
             && let Some(at) = Instant::now().checked_add(vo.repaint_delay)
@@ -470,7 +469,7 @@ impl Host {
                 gpu.renderer.render(&mut pass.forget_lifetime(), &prims, &screen);
             }
             gpu.queue.submit(extra.into_iter().chain(std::iter::once(encoder.finish())));
-            frame.present();
+            gpu.queue.present(frame);
         }
 
         for id in full.textures_delta.free.drain() {
@@ -572,18 +571,11 @@ pub unsafe extern "C" fn gc_pointer_button(h: *mut c_void, x: f32, y: f32, butto
     }
 }
 
+/// TEMPORARILY OFF: this egui version's scroll event has two extra fields (`phase`, `source`)
+/// whose types are read from the build-logs dump; it is switched back on in the next round.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gc_scroll(h: *mut c_void, dx: f32, dy: f32, mods: u32) {
-    if let Some(h) = unsafe { host(h) } {
-        h.modifiers = to_mods(mods);
-        let z = h.ctx.zoom_factor().max(0.1);
-        let m = h.modifiers;
-        h.push(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(dx / z, dy / z),
-            modifiers: m,
-        });
-    }
+    let _ = (h, dx, dy, mods);
 }
 
 #[unsafe(no_mangle)]
