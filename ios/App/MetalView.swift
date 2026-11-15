@@ -187,7 +187,15 @@ final class MetalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         }
     }
 
-    func saveResult(ok: Bool) { if let h = handle { gc_save_result(h, ok ? 1 : 0) } }
+    /// The Save to Files sheet finished. `name` is the file the person chose.
+    func saveResult(ok: Bool, name: String? = nil) {
+        guard let h = handle else { return }
+        if let name = name {
+            name.withCString { gc_save_result(h, ok ? 1 : 0, $0) }
+        } else {
+            gc_save_result(h, ok ? 1 : 0, nil)
+        }
+    }
 
     // MARK: Keyboard
 
