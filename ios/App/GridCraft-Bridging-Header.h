@@ -34,7 +34,7 @@ void gc_cut(void *h);
 void gc_paste(void *h, const char *utf8);
 void gc_open_file(void *h, const char *name, const uint8_t *data, size_t len);
 void gc_picture_file(void *h, const char *name, const uint8_t *data, size_t len);
-void gc_save_result(void *h, int ok);
+void gc_save_result(void *h, int ok, const char *final_name);
 int gc_frame(void *h);
 void gc_save_state(void *h);
 int gc_is_dirty(void *h);
