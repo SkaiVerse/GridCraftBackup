@@ -37,7 +37,7 @@ jobs:
           patch("crates/ui-egui/src/fonts.rs", [
               (MAC, IOS),
               ('dirs.push(h.join("Library/Fonts"));',
-               'dirs.push(h.join("Library/Fonts"));\n                dirs.push(h.join("Documents/Fonts"));'),
+               'dirs.push(h.join("Library/Fonts"));\n                dirs.push(h.join("Documents/Fonts"));\n                dirs.push(h.join("Library/Caches/SystemFonts"));'),
           ])
           patch("crates/ui-egui/src/theme/font_setup.rs", [
               (MAC, IOS),
