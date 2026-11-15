@@ -16,14 +16,28 @@ func gcLog(_ message: String) {
 }
 
 /// Owns the drawing view and everything that needs Apple's own screens: Files, alerts, printing.
+///
+/// Saving: Save As (and a workbook's first save) always shows Apple's Save to Files sheet. After
+/// that, the app's Save and AutoSave write a working copy in Documents/Working, and this class
+/// copies that file to the file the person chose, silently, about a second later.
 final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate {
 
     private let metal = MetalView()
     private enum Mode { case open, save, picture }
     private var mode: Mode = .open
 
+    /// File name -> the file the person chose in the Save to Files sheet.
+    private var targets: [String: URL] = [:]
+    /// File name -> when its working copy was last copied to the chosen file.
+    private var lastCopied: [String: Date] = [:]
+    private var mirrorTimer: Timer?
+
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
+
+    private var workingFolder: URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent("Working", isDirectory: true)
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -61,11 +75,16 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
 
         let nc = NotificationCenter.default
         nc.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.mirrorWorkingCopies()
             self?.metal.saveState()
             self?.metal.setFocused(false)
         }
         nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.metal.setFocused(true)
+        }
+
+        mirrorTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.mirrorWorkingCopies()
         }
     }
 
@@ -93,7 +112,12 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
         case .picture:
             for url in urls { read(url) { name, data in self.metal.deliverPicture(name: name, data: data) } }
         case .save:
-            metal.saveResult(ok: true)
+            if let u = urls.first {
+                register(target: u)
+                metal.saveResult(ok: true, name: u.lastPathComponent)
+            } else {
+                metal.saveResult(ok: false)
+            }
         }
     }
 
@@ -118,10 +142,9 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
 
     // MARK: Saving
 
-    /// Always Apple's own Save to Files sheet. If the same name is chosen in the same folder,
-    /// Files itself asks Replace / Keep Both / Cancel.
+    /// Always Apple's own Save to Files sheet (Save As, a first save, or an export).
     private func handleSave(name: String, data: Data) {
-        gcLog("save requested: \(name), \(data.count) bytes")
+        gcLog("save sheet requested: \(name), \(data.count) bytes")
         guard presentedViewController == nil else { metal.saveResult(ok: false); return }
         let safe = name.replacingOccurrences(of: "/", with: "_")
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -138,6 +161,43 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
             metal.suspendFocus = false
             metal.saveResult(ok: false)
             message("Couldn’t prepare the file", error.localizedDescription)
+        }
+    }
+
+    /// Remembers the file the person chose, so later saves can update it without asking.
+    private func register(target url: URL) {
+        let name = url.lastPathComponent
+        guard name.lowercased().hasSuffix(".xlsx") else { return }
+        _ = url.startAccessingSecurityScopedResource()   // kept open so later saves can write
+        targets[name] = url
+        lastCopied[name] = Date()
+        gcLog("silent saves will update \(name)")
+    }
+
+    /// Copies each working copy that changed since the last copy to the file the person chose.
+    private func mirrorWorkingCopies() {
+        guard let folder = workingFolder else { return }
+        for (name, url) in targets {
+            let work = folder.appendingPathComponent(name)
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: work.path),
+                  let modified = attrs[.modificationDate] as? Date else { continue }
+            if modified <= (lastCopied[name] ?? .distantPast) { continue }
+            guard let data = try? Data(contentsOf: work) else { continue }
+
+            var coordError: NSError?
+            var writeError: Error?
+            NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordError) { writeURL in
+                do { try data.write(to: writeURL) } catch { writeError = error }
+            }
+            if let e = (coordError as Error?) ?? writeError {
+                gcLog("could not update \(name): \(e.localizedDescription)")
+                targets[name] = nil
+                message("Couldn’t update “\(name)”",
+                        "Your changes are kept in Files › On My iPad › GridCraft › Working. Use Save As to save a copy where you want it.\n\n\(e.localizedDescription)")
+            } else {
+                lastCopied[name] = modified
+                gcLog("updated \(name) (\(data.count) bytes)")
+            }
         }
     }
 
