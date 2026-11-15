@@ -35,11 +35,14 @@ pub struct GCCallbacks {
 // Small helpers
 // ---------------------------------------------------------------------------------------------
 
+fn documents_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Documents"))
+}
+
 fn note(msg: &str) {
     use std::io::Write;
-    let Some(home) = std::env::var_os("HOME") else { return };
-    let path = PathBuf::from(home).join("Documents").join("GridCraft-log.txt");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    let Some(dir) = documents_dir() else { return };
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("GridCraft-log.txt")) {
         let _ = writeln!(f, "[rust] {msg}");
     }
 }
@@ -110,28 +113,6 @@ fn hid_to_key(hid: u32) -> Option<egui::Key> {
     })
 }
 
-/// Writes down which system font folders this iPad lets the app read, so the font lookup can be
-/// checked against the real layout.
-fn log_font_dirs() {
-    for d in [
-        "/System/Library/Fonts",
-        "/System/Library/Fonts/Core",
-        "/System/Library/Fonts/CoreAddition",
-        "/System/Library/Fonts/Supplemental",
-        "/System/Library/Fonts/AppFonts",
-        "/System/Library/Fonts/LanguageSupport",
-        "/Library/Fonts",
-    ] {
-        match std::fs::read_dir(d) {
-            Ok(rd) => {
-                let names: Vec<String> = rd.flatten().take(14).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-                note(&format!("font folder {d}: readable, first entries {names:?}"));
-            }
-            Err(e) => note(&format!("font folder {d}: {e}")),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------------------------
 // Preferences (same files as the desktop app, in the app's own folder)
 // ---------------------------------------------------------------------------------------------
@@ -179,9 +160,11 @@ fn build_services(
     inbox: &Inbox,
     pictures: &Rc<RefCell<Option<Inbox>>>,
     pending: &Rc<RefCell<Option<String>>>,
+    pending_bytes: &Rc<RefCell<Option<Vec<u8>>>>,
 ) -> Services {
     let pictures = pictures.clone();
     let pending = pending.clone();
+    let pending_bytes = pending_bytes.clone();
     Services {
         inbox: Some(inbox.clone()),
         open_async: Some(Box::new(move || {
@@ -198,6 +181,7 @@ fn build_services(
         })),
         download: Some(Box::new(move |name: &str, bytes: &[u8]| {
             *pending.borrow_mut() = Some(name.to_string());
+            *pending_bytes.borrow_mut() = Some(bytes.to_vec());
             if let Some(f) = cb.save_file {
                 let n = cstring(name);
                 unsafe { f(cb.user, n.as_ptr(), bytes.as_ptr(), bytes.len()) }
@@ -300,6 +284,7 @@ struct Host {
     inbox: Inbox,
     pictures: Rc<RefCell<Option<Inbox>>>,
     pending_save: Rc<RefCell<Option<String>>>,
+    pending_bytes: Rc<RefCell<Option<Vec<u8>>>>,
     wants_keyboard: bool,
     zoom_pct: f32,
     fonts_logged: bool,
@@ -314,7 +299,14 @@ fn wake_at(deadline: &Arc<Mutex<Option<Instant>>>, at: Instant) {
 
 impl Host {
     fn new(layer: *mut c_void, width: u32, height: u32, scale: f32, cb: GCCallbacks) -> Result<Host, String> {
-        log_font_dirs();
+        // Folders that show up in Files > On My iPad > GridCraft.
+        if let Some(docs) = documents_dir() {
+            let _ = std::fs::create_dir_all(docs.join("Fonts"));
+            let _ = std::fs::create_dir_all(docs.join("Working"));
+        }
+        // Catalog the fonts on this iPad (the app starts this itself only in its desktop setup).
+        gridcraft_ui_egui::fonts::start_scan();
+
         let gpu = Gpu::new(layer, width, height)?;
         let ctx = egui::Context::default();
         // Apple's shortcut set only: the app asks the context which system it runs on.
@@ -331,7 +323,8 @@ impl Host {
         let inbox: Inbox = Inbox::default();
         let pictures: Rc<RefCell<Option<Inbox>>> = Rc::new(RefCell::new(None));
         let pending_save: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-        let services = build_services(cb, &inbox, &pictures, &pending_save);
+        let pending_bytes: Rc<RefCell<Option<Vec<u8>>>> = Rc::new(RefCell::new(None));
+        let services = build_services(cb, &inbox, &pictures, &pending_save, &pending_bytes);
 
         let mut app = SheetApp::new(Session::new(), services);
         load_prefs(&mut app);
@@ -356,6 +349,7 @@ impl Host {
             inbox,
             pictures,
             pending_save,
+            pending_bytes,
             wants_keyboard: false,
             zoom_pct: 100.0,
             fonts_logged: false,
@@ -395,24 +389,6 @@ impl Host {
         self.wake();
     }
 
-    /// AutoSave saves a workbook to its file. A workbook opened from Files has no file of its own,
-    /// so while AutoSave is on it gets one in the app's AutoSave folder (Files > On My iPad >
-    /// GridCraft > AutoSave). The app's own AutoSave then keeps it up to date, silently.
-    fn ensure_autosave_path(&mut self) {
-        let Some(home) = std::env::var_os("HOME") else { return };
-        let dir = PathBuf::from(home).join("Documents").join("AutoSave");
-        if let Some(doc) = self.app.session.active_mut()
-            && doc.path.is_none()
-        {
-            let _ = std::fs::create_dir_all(&dir);
-            let cleaned: String = doc.title.chars().filter(|c| !matches!(c, '/' | '\\' | ':' | '\0')).collect();
-            let stem = cleaned.trim().trim_end_matches(".xlsx").trim_end_matches(".XLSX").trim().to_string();
-            let stem = if stem.is_empty() { "Book1".to_string() } else { stem };
-            doc.path = Some(dir.join(format!("{stem}.xlsx")).to_string_lossy().into_owned());
-            note(&format!("AutoSave file for this workbook: {stem}.xlsx"));
-        }
-    }
-
     fn handle_output(&self, out: &egui::PlatformOutput) {
         for cmd in &out.commands {
             match cmd {
@@ -445,9 +421,6 @@ impl Host {
         }
         *self.deadline.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
-        if self.app.ui.autosave {
-            self.ensure_autosave_path();
-        }
         if !self.fonts_logged && gridcraft_ui_egui::fonts::scan_done() {
             self.fonts_logged = true;
             let n = gridcraft_ui_egui::fonts::catalog().len();
@@ -756,18 +729,35 @@ pub unsafe extern "C" fn gc_picture_file(h: *mut c_void, name: *const c_char, da
     }
 }
 
-/// The save sheet finished (ok = 1) or was cancelled (ok = 0). A saved workbook counts as saved.
+/// The Save to Files sheet finished (ok = 1, with the name of the file the person chose) or was
+/// cancelled (ok = 0). A saved workbook counts as saved, and from then on has a working copy in
+/// the app's Working folder: Save and AutoSave write there silently and the shell copies the
+/// result to the chosen file. Save As does not use that path; it always asks.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn gc_save_result(h: *mut c_void, ok: c_int) {
+pub unsafe extern "C" fn gc_save_result(h: *mut c_void, ok: c_int, final_name: *const c_char) {
     if let Some(h) = unsafe { host(h) } {
-        let name = h.pending_save.borrow_mut().take();
-        if ok != 0
-            && let Some(name) = name
-            && name.to_ascii_lowercase().ends_with(".xlsx")
-            && let Some(doc) = h.app.session.active_mut()
-        {
-            doc.saved = doc.wb.clone();
-            if doc.path.is_none() {
+        let asked = h.pending_save.borrow_mut().take();
+        let bytes = h.pending_bytes.borrow_mut().take();
+        let chosen = unsafe { from_c(final_name) };
+        if ok != 0 {
+            let name = chosen.or(asked);
+            if let Some(name) = name
+                && name.to_ascii_lowercase().ends_with(".xlsx")
+                && let Some(doc) = h.app.session.active_mut()
+            {
+                let working = documents_dir().map(|d| d.join("Working").join(name.replace('/', "_")));
+                if let Some(path) = &working {
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if let Some(bytes) = &bytes {
+                        let _ = std::fs::write(path, bytes);
+                    }
+                }
+                doc.saved = doc.wb.clone();
+                if let Some(path) = working {
+                    doc.path = Some(path.to_string_lossy().into_owned());
+                }
                 doc.title = name;
             }
         }
