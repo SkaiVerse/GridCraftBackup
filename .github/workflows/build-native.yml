@@ -34,23 +34,23 @@ jobs:
               p.write_text(s)
           MAC = 'cfg!(target_os = "macos")'
           IOS = 'cfg!(any(target_os = "macos", target_os = "ios"))'
-          patch("crates/ui-egui/src/fonts.rs", [(MAC, IOS)])
+          patch("crates/ui-egui/src/fonts.rs", [
+              (MAC, IOS),
+              ('dirs.push(h.join("Library/Fonts"));',
+               'dirs.push(h.join("Library/Fonts"));\n                dirs.push(h.join("Documents/Fonts"));'),
+          ])
           patch("crates/ui-egui/src/theme/font_setup.rs", [
               (MAC, IOS),
               ('let mac_sys = "/System/Library/Fonts";',
                'let mac_sys = if cfg!(target_os = "ios") { "/System/Library/Fonts/Core" } else { "/System/Library/Fonts" };'),
               ('let mac_sup = "/System/Library/Fonts/Supplemental";',
                'let mac_sup = if cfg!(target_os = "ios") { "/System/Library/Fonts/CoreAddition" } else { "/System/Library/Fonts/Supplemental" };'),
+              ('add(format!("{mac_sup}/{arial_mac}"), 0);',
+               'add(format!("{mac_sup}/{arial_mac}"), 0);\n            add(format!("{mac_sys}/HelveticaNeue.ttc"), match role { "cell" => 0, "cell-bold" => 1, "cell-italic" => 2, _ => 3 });'),
           ])
           pathlib.Path("logs/font-patch-result.txt").write_text("\n".join(report) + "\n")
           PYEOF
           cat logs/font-patch-result.txt
-
-      - name: Collect autosave code for debugging
-        continue-on-error: true
-        run: |
-          mkdir -p logs
-          grep -rn "fn autosave" -A40 crates/ui-egui/src > logs/autosave-code.txt || true
 
       - name: Build the Rust core
         run: |
