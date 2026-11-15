@@ -38,7 +38,8 @@ enum SystemFonts {
                     skipped += 1
                     continue
                 }
-                guard let cg = CTFontCopyGraphicsFont(ct, nil), let tags = tableTags(of: cg) else {
+                let cg: CGFont = CTFontCopyGraphicsFont(ct, nil)
+                guard let tags = tableTags(of: cg) else {
                     failed += 1
                     continue
                 }
