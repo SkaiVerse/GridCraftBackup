@@ -2,6 +2,11 @@ import SwiftUI
 
 @main
 struct GridCraftApp: App {
+    init() {
+        // Before any window exists, so GridCraft finds the iPad's fonts when it starts.
+        SystemFonts.prepare()
+    }
+
     var body: some Scene {
         WindowGroup {
             ZStack {
