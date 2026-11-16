@@ -7,7 +7,7 @@ jobs:
   probe2:
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -45,7 +45,7 @@ jobs:
           grep -rn "pub fn open_path\|pub fn after_engine\|fn is_dirty\|pub allow_close\|fn open_bytes\|fn save_as\|fn save(" crates > out/grep-open-save.txt || true
           cp Cargo.lock out/Cargo.lock || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: probe2-info
